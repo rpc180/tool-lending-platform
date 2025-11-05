@@ -1,0 +1,200 @@
+// ------------------------------------------------------
+// PRISMA SCHEMA — Tool Lending / Borrowing Platform
+// ------------------------------------------------------
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// User accounts (NextAuth handles auth control)
+model User {
+  id         String   @id @default(cuid())
+  name       String?
+  email      String?  @unique
+  emailVerified DateTime? // required for auth.js email login
+  image      String?
+  phone      String?  @unique
+  countyFips String? // link to County.fips5
+  state      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // relationships
+  circles           CircleMember[]
+  tools             Tool[]         @relation("UserTools")
+  borrowed          Loan[]         @relation("BorrowedLoans")
+  ownedLoans        Loan[]         @relation("OwnedLoans")
+  requests          Request[]      @relation("Requester")
+  requestItemsOwned RequestItem[]  @relation("UserOwnedRequestItems")
+  notifications     Notification[]
+  accounts          Account[] // needed for Auth.js OAuth providers
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+
+// A sharing group (friends, neighborhood, club, etc.)
+model Circle {
+  id        String   @id @default(cuid())
+  name      String
+  createdBy String
+  createdAt DateTime @default(now())
+
+  members CircleMember[]
+  tools   Tool[]
+}
+
+// Membership of a user inside a circle
+model CircleMember {
+  id       String @id @default(cuid())
+  circleId String
+  userId   String
+  role     String @default("member") // owner, member
+  status   String @default("active") // pending, active
+
+  circle Circle @relation(fields: [circleId], references: [id])
+  user   User   @relation(fields: [userId], references: [id])
+
+  @@unique([circleId, userId])
+}
+
+// Master table of general tool categories (Power Tools, Lawn, etc.)
+model ToolCategory {
+  id    String     @id @default(cuid())
+  name  String     @unique
+  types ToolType[]
+}
+
+// Tool subtypes (Circular Saw, Drill, Lawn Mower, etc.)
+model ToolType {
+  id         String @id @default(cuid())
+  name       String
+  categoryId String
+
+  category ToolCategory @relation(fields: [categoryId], references: [id])
+  tools    Tool[]
+
+  @@unique([categoryId, name])
+}
+
+// Manufacturers list (Ryobi, Milwaukee, DeWalt, etc.)
+model Manufacturer {
+  id    String @id @default(cuid())
+  name  String @unique
+  tools Tool[]
+}
+
+// Tools registered by users
+model Tool {
+  id             String  @id @default(cuid())
+  ownerId        String
+  circleId       String
+  typeId         String // ToolType
+  manufacturerId String? // Manufacturer
+  model          String?
+  notes          String?
+  imageKey       String? // S3/blob storage reference
+  countyFips     String?
+  state          String?
+  visibility     Boolean @default(true) // owner can toggle off
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owner        User          @relation("UserTools", fields: [ownerId], references: [id])
+  circle       Circle        @relation(fields: [circleId], references: [id])
+  type         ToolType      @relation(fields: [typeId], references: [id])
+  manufacturer Manufacturer? @relation(fields: [manufacturerId], references: [id])
+  requestItems RequestItem[]
+  loans        Loan[]
+}
+
+// Borrowing request (cart-level)
+model Request {
+  id          String   @id @default(cuid())
+  requesterId String
+  circleId    String
+  createdAt   DateTime @default(now())
+
+  requester User          @relation("Requester", fields: [requesterId], references: [id])
+  items     RequestItem[]
+}
+
+// Per-tool request resolution
+model RequestItem {
+  id         String @id @default(cuid())
+  requestId  String
+  toolId     String
+  ownerId    String // duplicate stored here for routing
+  status     String @default("pending") // pending, approved, declined
+  replyToken String @unique // token for SMS YES/NO
+
+  request Request @relation(fields: [requestId], references: [id])
+  tool    Tool    @relation(fields: [toolId], references: [id])
+  owner   User    @relation("UserOwnedRequestItems", fields: [ownerId], references: [id])
+}
+
+// Active loan record
+model Loan {
+  id         String    @id @default(cuid())
+  toolId     String
+  ownerId    String
+  borrowerId String
+  startDate  DateTime  @default(now())
+  dueDate    DateTime
+  returnedAt DateTime?
+  status     String    @default("borrowed") // borrowed, overdue, returned
+
+  tool     Tool @relation(fields: [toolId], references: [id])
+  owner    User @relation("OwnedLoans", fields: [ownerId], references: [id])
+  borrower User @relation("BorrowedLoans", fields: [borrowerId], references: [id])
+}
+
+// Notification inbox
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  type      String // request, approved, overdue, info
+  payload   Json // extra data (tool, dates, owner, etc.)
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+// County lookup table (FIPS)
+model County {
+  fips5  String @id
+  county String
+  state  String
+}
